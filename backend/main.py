@@ -12,11 +12,13 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from registry import TokenEntry, TIMEFRAMES
-from streams import MarketEngine
-from indicators import compute_indicators, compute_signal
-from risk import analyze_risk
 
+import streams
+
+from backend.registry import TokenRegistry, TokenEntry, TIMEFRAMES
+from backend.streams import MarketEngine
+from backend.indicators import compute_indicators, compute_signal
+from backend.risk import analyze_risk
 
 
 logging.basicConfig(
