@@ -1,0 +1,234 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Consolas", "Monaco", "Lucida Console", monospace;
+  --font-mono: "Consolas", "Monaco", "Lucida Console", monospace;
+
+  /* ── Bloomberg palette ───────────────────────── */
+  --color-background:      #000000;
+  --color-surface:         #0a0a0a;
+  --color-surface-2:       #111111;
+  --color-border:          #222222;
+  --color-border-lit:      #333333;
+
+  /* Bloomberg signature orange */
+  --color-amber:           #ff8c00;
+  --color-amber-dim:       #cc7000;
+  --color-amber-bright:    #ffa500;
+
+  /* Accents */
+  --color-neon-green:      #00ff00;
+  --color-neon-cyan:       #00ccff;
+  --color-neon-red:        #ff0000;
+  --color-neon-yellow:     #ffff00;
+  --color-neon-purple:     #cc66ff;
+  --color-neon-blue:       #3399ff;
+
+  /* Text */
+  --color-foreground:      #ff8c00;
+  --color-muted:           #666666;
+  --color-dim:             #333333;
+  --color-white:           #ffffff;
+
+  /* Semantic */
+  --color-buy:             #00ff00;
+  --color-sell:            #ff0000;
+  --color-neutral:         #ffff00;
+
+  --radius: 0px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  -webkit-font-smoothing: none;
+}
+
+/* Bloomberg panel base */
+.bb-panel {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.bb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  height: 18px;
+  background: var(--color-amber);
+  color: #000000;
+  font-weight: bold;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bb-header-dark {
+  background: var(--color-surface-2);
+  color: var(--color-amber);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.bb-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 10px;
+}
+
+.bb-row:hover {
+  background: #1a1a00;
+}
+
+.bb-row.selected {
+  background: #332200;
+}
+
+/* Scrollbar - thin and minimal */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: var(--color-background); }
+::-webkit-scrollbar-thumb { background: var(--color-border-lit); }
+::-webkit-scrollbar-thumb:hover { background: var(--color-amber); }
+
+/* Price flash animations */
+@keyframes flash-green { 0% { background: rgba(0,255,0,0.3); } 100% { background: transparent; } }
+@keyframes flash-red { 0% { background: rgba(255,0,0,0.3); } 100% { background: transparent; } }
+.flash-green { animation: flash-green 0.3s ease-out; }
+.flash-red { animation: flash-red 0.3s ease-out; }
+
+/* Blinking cursor */
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+.blink { animation: blink 1s step-end infinite; }
+
+/* Text colors */
+.text-amber { color: var(--color-amber); }
+.text-green { color: var(--color-neon-green); }
+.text-red { color: var(--color-neon-red); }
+.text-yellow { color: var(--color-neon-yellow); }
+.text-cyan { color: var(--color-neon-cyan); }
+.text-white { color: var(--color-white); }
+.text-muted { color: var(--color-muted); }
+
+/* Data table styles */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.data-table th {
+  background: var(--color-surface-2);
+  color: var(--color-amber);
+  text-align: left;
+  padding: 2px 4px;
+  font-weight: normal;
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+}
+
+.data-table td {
+  padding: 1px 4px;
+  border-bottom: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table tr:hover {
+  background: #1a1a00;
+}
+
+/* Input styles */
+input, button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input[type="text"] {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  color: var(--color-foreground);
+  padding: 2px 4px;
+}
+
+input[type="text"]:focus {
+  outline: none;
+  border-color: var(--color-amber);
+}
+
+/* Button styles */
+.bb-btn {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-amber);
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.bb-btn:hover {
+  background: var(--color-amber);
+  color: #000000;
+}
+
+.bb-btn.active {
+  background: var(--color-amber);
+  color: #000000;
+}
+
+/* Ticker tape animation */
+@keyframes ticker {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.ticker-tape {
+  animation: ticker 30s linear infinite;
+}
+
+/* Analytics panel sections */
+.bb-section {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.bb-section-header {
+  background: var(--color-surface-2);
+  color: var(--color-amber);
+  font-size: 9px;
+  font-weight: bold;
+  padding: 2px 8px;
+  letter-spacing: 0.5px;
+}
+
+.bb-label {
+  color: var(--color-muted);
+  font-size: 9px;
+  min-width: 50px;
+}
+
+.bb-value {
+  color: var(--color-amber);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
