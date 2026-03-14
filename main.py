@@ -1,104 +1,294 @@
-#!/usr/bin/env python3
 """
-main.py — entry point.
+backend/main.py
+FastAPI backend for Pumpberg Terminal
+"""
 
-Runs FastAPI backend (uvicorn on :8000) + Next.js frontend (npm run dev on :3000)
-as two parallel subprocesses. No Vercel CLI needed.
+from __future__ import annotations
 
-Just run:  python main.py
-""" 
-import subprocess
-import sys
-import os
-import signal
-import threading
+import asyncio
+import logging
+import time
+from typing import List, Optional
+from contextlib import asynccontextmanager
 
-IS_WIN = sys.platform == "win32"
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-def _cmd(name: str) -> str:
-    """Return the correct executable name for the current platform."""
-    return name + ".cmd" if IS_WIN else name
-
-
-def _stream(proc: subprocess.Popen, prefix: str) -> None:
-    """Forward subprocess stdout/stderr to our console with a prefix."""
-    for line in iter(proc.stdout.readline, b""):
-        print(f"{prefix} {line.decode(errors='replace').rstrip()}", flush=True)
+from backend.registry import TokenEntry, TIMEFRAMES
+from backend.streams import MarketEngine
+from backend.indicators import compute_indicators, compute_signal
+from backend.risk import analyze_risk
 
 
-def main() -> None:
-    root   = os.path.dirname(os.path.abspath(__file__))
-    be_dir = os.path.join(root, "backend")
-    fe_dir = os.path.join(root, "frontend")
+# ----------------------------------------------------------
+# Logging
+# ----------------------------------------------------------
 
-    # ── 1. Install Python backend deps ────────────────────────────────────
-    print("[launcher] Installing backend Python dependencies ...")
-    pip = subprocess.run(
-        [sys.executable, "-m", "pip", "install",
-         "fastapi[standard]", "websockets", "pandas", "numpy",
-         "--quiet", "--disable-pip-version-check"],
-        check=False,
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+
+logger = logging.getLogger("pumpberg")
+
+
+# ----------------------------------------------------------
+# WebSocket connection manager
+# ----------------------------------------------------------
+
+class ConnectionManager:
+
+    def __init__(self):
+        self.clients: List[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.clients.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.clients:
+            self.clients.remove(ws)
+
+    async def broadcast(self, data: dict):
+
+        dead = []
+
+        for ws in self.clients:
+
+            try:
+                await ws.send_json(data)
+            except:
+                dead.append(ws)
+
+        for ws in dead:
+            self.disconnect(ws)
+
+
+price_manager = ConnectionManager()
+token_manager = ConnectionManager()
+
+
+# ----------------------------------------------------------
+# Engine
+# ----------------------------------------------------------
+
+engine: Optional[MarketEngine] = None
+engine_task: Optional[asyncio.Task] = None
+
+
+def on_price(symbol: str, price: float):
+
+    asyncio.create_task(
+        price_manager.broadcast({
+            "symbol": symbol,
+            "price": price,
+            "ts": time.time()
+        })
     )
-    if pip.returncode != 0:
-        print("[launcher] WARNING: pip install had errors — continuing anyway")
 
-    # ── 2. Install Node frontend deps ─────────────────────────────────────
-    if not os.path.isdir(os.path.join(fe_dir, "node_modules")):
-        print("[launcher] Installing frontend Node.js dependencies (first run) ...")
-        try:
-            subprocess.run(
-                [_cmd("npm"), "install"],
-                cwd=fe_dir,
-                check=True,
-                shell=IS_WIN,
-            )
-        except FileNotFoundError:
-            print(
-                "\n[launcher] ERROR: 'npm' not found.\n"
-                "Install Node.js from https://nodejs.org then re-run.\n"
-            )
-            sys.exit(1)
 
-    print("\n[launcher] Starting services:")
-    print("  backend  → http://localhost:8000")
-    print("  frontend → http://localhost:3000\n")
+def on_new_token(symbol: str, mint: str):
 
-    # ── 3. Start FastAPI with uvicorn ──────────────────────────────────────
-    backend = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app",
-         "--host", "0.0.0.0", "--port", "8000", "--reload"],
-        cwd=be_dir,
-        env={**os.environ, "PYTHONPATH": "."},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    asyncio.create_task(
+        token_manager.broadcast({
+            "symbol": symbol,
+            "mint": mint,
+            "ts": time.time()
+        })
     )
 
-    # ── 4. Start Next.js dev server ────────────────────────────────────────
-    frontend = subprocess.Popen(
-        [_cmd("npm"), "run", "dev"],
-        cwd=fe_dir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        shell=IS_WIN,
+
+# ----------------------------------------------------------
+# Lifespan
+# ----------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    global engine
+    global engine_task
+
+    logger.info("Starting Pumpberg engine...")
+
+    engine = MarketEngine(
+        on_price_update=on_price,
+        on_new_token=on_new_token
     )
 
-    # Stream output from both processes
-    threading.Thread(target=_stream, args=(backend,  "[backend] "), daemon=True).start()
-    threading.Thread(target=_stream, args=(frontend, "[frontend]"), daemon=True).start()
+    engine_task = asyncio.create_task(engine.start())
 
-    # ── 5. Wait — kill both on Ctrl+C ─────────────────────────────────────
-    def _shutdown(sig, frame):
-        print("\n[launcher] Shutting down ...")
-        backend.terminate()
-        frontend.terminate()
-        sys.exit(0)
+    yield
 
-    signal.signal(signal.SIGINT,  _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
+    logger.info("Stopping Pumpberg engine")
 
-    backend.wait()
-    frontend.wait()
+    if engine_task:
+        engine_task.cancel()
 
 
-if __name__ == "__main__":
-    main()
+# ----------------------------------------------------------
+# App
+# ----------------------------------------------------------
+
+app = FastAPI(
+    title="Pumpberg Terminal API",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ----------------------------------------------------------
+# Models
+# ----------------------------------------------------------
+
+class SubscribeRequest(BaseModel):
+    mint: str
+    symbol: Optional[str] = None
+
+
+# ----------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------
+
+def serialize_token(token: TokenEntry, include_candles=False):
+
+    prices = token.price_store.get()
+
+    df = compute_indicators(prices)
+
+    signal = compute_signal(df) if df is not None else "NEUTRAL"
+
+    risk = analyze_risk(token)
+
+    latest = token.latest_price()
+
+    return {
+        "symbol": token.symbol,
+        "mint": token.mint,
+        "price": latest,
+        "signal": signal,
+        "risk": risk,
+        "volume_24h": token.volume_24h,
+        "trade_count": len(token.trades),
+        "discovered": token.discovered,
+    }
+
+
+# ----------------------------------------------------------
+# REST
+# ----------------------------------------------------------
+
+@app.get("/tokens")
+async def tokens():
+
+    if not engine:
+        return {"tokens": []}
+
+    tokens = engine.registry.all_tokens()
+
+    tokens.sort(key=lambda t: t.discovered, reverse=True)
+
+    return {
+        "tokens": [serialize_token(t) for t in tokens[:200]],
+        "total": engine.registry.token_count()
+    }
+
+
+@app.get("/token/{symbol}")
+async def token(symbol: str):
+
+    if not engine:
+        raise HTTPException(503)
+
+    t = engine.registry.get(symbol.upper())
+
+    if not t:
+        raise HTTPException(404)
+
+    return serialize_token(t, True)
+
+
+@app.get("/token/mint/{mint}")
+async def token_by_mint(mint: str):
+
+    if not engine:
+        raise HTTPException(503)
+
+    t = engine.registry.get_by_mint(mint)
+
+    if not t:
+        raise HTTPException(404)
+
+    return serialize_token(t, True)
+
+
+@app.post("/token/subscribe")
+async def subscribe(req: SubscribeRequest):
+
+    if not engine:
+        raise HTTPException(503)
+
+    symbol = req.symbol or req.mint[:8]
+
+    engine.registry.add_token(symbol, req.mint)
+
+    engine.subscribe_mint(req.mint)
+
+    return {"status": "ok"}
+
+
+@app.get("/health")
+async def health():
+
+    return {
+        "status": "ok",
+        "tokens": engine.registry.token_count() if engine else 0
+    }
+
+
+# ----------------------------------------------------------
+# WebSockets
+# ----------------------------------------------------------
+
+@app.websocket("/ws/market")
+async def ws_market(ws: WebSocket):
+
+    await price_manager.connect(ws)
+
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        price_manager.disconnect(ws)
+
+
+@app.websocket("/ws/tokens")
+async def ws_tokens(ws: WebSocket):
+
+    await token_manager.connect(ws)
+
+    if engine:
+
+        tokens = engine.registry.all_tokens()
+
+        tokens.sort(key=lambda t: t.discovered, reverse=True)
+
+        for token in tokens[:50]:
+
+            await ws.send_json({
+                "symbol": token.symbol,
+                "mint": token.mint,
+                "ts": token.discovered
+            })
+
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        token_manager.disconnect(ws)

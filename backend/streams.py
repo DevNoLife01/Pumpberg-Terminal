@@ -1,18 +1,4 @@
-"""
-backend/streams.py
-Robust Pump.fun streaming backend
-
-Features
---------
-
-• Single PumpPortal websocket (required by API)
-• Auto reconnect with exponential backoff
-• Proper async queue consumption
-• Deduplicated mint subscriptions
-• Safe message parsing
-"""
-
-from __future__ import annotations
+# backend/streams.py
 
 import asyncio
 import json
@@ -32,10 +18,6 @@ BACKOFF_START = 1
 BACKOFF_MAX = 60
 
 
-# ---------------------------------------------------------
-# PumpPortal Stream
-# ---------------------------------------------------------
-
 async def pump_stream(
     registry: TokenRegistry,
     subscribe_queue: asyncio.Queue,
@@ -44,7 +26,6 @@ async def pump_stream(
 ):
 
     subscribed: Set[str] = set()
-
     backoff = BACKOFF_START
 
     while True:
@@ -70,23 +51,19 @@ async def pump_stream(
                 logger.info("Subscribed to new tokens")
 
                 consumer = asyncio.create_task(
-                    _mint_subscription_worker(ws, subscribe_queue, subscribed)
+                    _subscription_worker(ws, subscribe_queue, subscribed)
                 )
 
                 async for msg in ws:
 
                     try:
-
                         data = json.loads(msg)
-
-                    except Exception:
+                    except:
                         continue
 
-                    # -------------------------------------------------
                     # NEW TOKEN EVENT
-                    # -------------------------------------------------
 
-                    if "mint" in data and "symbol" in data and "txType" not in data:
+                    if data.get("symbol") and data.get("mint") and not data.get("txType"):
 
                         symbol = data["symbol"].upper()
                         mint = data["mint"]
@@ -95,7 +72,7 @@ async def pump_stream(
 
                         if added:
 
-                            logger.info(f"New token: {symbol} {mint[:8]}")
+                            logger.info(f"New token discovered: {symbol} {mint[:8]}")
 
                             if on_new_token:
                                 on_new_token(symbol, mint)
@@ -104,9 +81,7 @@ async def pump_stream(
 
                         continue
 
-                    # -------------------------------------------------
                     # TRADE EVENT
-                    # -------------------------------------------------
 
                     mint = data.get("mint")
 
@@ -119,7 +94,6 @@ async def pump_stream(
                         price = float(data["price"])
 
                     elif "solAmount" in data and "tokenAmount" in data:
-
                         token_amt = float(data["tokenAmount"]) or 1e-10
                         price = float(data["solAmount"]) / token_amt
 
@@ -127,7 +101,6 @@ async def pump_stream(
                         continue
 
                     size = float(data.get("tokenAmount", 0))
-
                     side = "sell" if data.get("txType") == "sell" else "buy"
 
                     token = registry.get_by_mint(mint)
@@ -142,11 +115,9 @@ async def pump_stream(
                 consumer.cancel()
 
         except (ConnectionClosedError, WebSocketException) as e:
-
             logger.warning(f"PumpPortal connection closed: {e}")
 
         except Exception as e:
-
             logger.error(f"PumpPortal error: {e}", exc_info=True)
 
         logger.info(f"Reconnecting in {backoff}s")
@@ -156,11 +127,7 @@ async def pump_stream(
         backoff = min(backoff * 2, BACKOFF_MAX)
 
 
-# ---------------------------------------------------------
-# Subscription Worker
-# ---------------------------------------------------------
-
-async def _mint_subscription_worker(
+async def _subscription_worker(
     ws,
     queue: asyncio.Queue,
     subscribed: Set[str]
@@ -182,16 +149,12 @@ async def _mint_subscription_worker(
                 "keys": [mint]
             }))
 
-            logger.info(f"Subscribed trades: {mint[:8]}")
+            logger.info(f"Subscribed to trades: {mint[:8]}")
 
         except Exception as e:
 
             logger.warning(f"Subscription failed: {e}")
 
-
-# ---------------------------------------------------------
-# Market Engine
-# ---------------------------------------------------------
 
 class MarketEngine:
 
@@ -206,11 +169,14 @@ class MarketEngine:
         self.on_price = on_price_update
         self.on_new_token = on_new_token
 
+        self.loop = None
         self.mint_queue: asyncio.Queue = asyncio.Queue()
 
     async def start(self):
 
         logger.info("MarketEngine starting...")
+
+        self.loop = asyncio.get_running_loop()
 
         await pump_stream(
             registry=self.registry,
